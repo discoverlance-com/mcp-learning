@@ -21,6 +21,87 @@ type Content = {
   text: string;
 };
 
+type AIMessage = {
+  role?: "user" | "model";
+  parts: {
+    text?: string;
+    thought?: boolean;
+    functionCall?: { name: string; args: object; id?: string };
+    functionResponse?: { id?: string; name: string; response: object };
+  }[];
+};
+
+type AITool = {
+  functionDeclarations: [
+    {
+      name: string;
+      description: string;
+      parameters: Tool["inputSchema"];
+    }
+  ];
+};
+
+type Candidate = {
+  content: AIMessage;
+  tokenCount: number;
+};
+
+async function callAI(messages: AIMessage[], tools: AITool[] = []) {
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        contents: messages,
+        tools,
+        generationConfig: {
+          maxOutputTokens: 2048,
+        },
+        systemInstruction: {
+          parts: [
+            {
+              text: `You are a friendly, helpful AI assistant that helps users find information about real estate. You must use the provided tools to answer questions about estates.
+
+              Always speak naturally and conversationally, as if you're chatting with the user. Avoid quoting raw field names like "description" or "price" unless the user asks for specific data.
+
+              If an estate's data does not explicitly mention something (like a garden), let the user know gently. For example, say: "It doesn't look like this estate has a garden," or "There's no mention of a garden, so it may not include one."
+
+              Respond in a warm, human tone. Don't say things like “the description says...” — instead, paraphrase naturally.
+
+              When calling tools that require estate names, extract only the estate name from the user's sentence. Be careful not to include surrounding context (e.g., “having a storey”) in the name.
+
+              If a user asks about something that isn't mentioned in the data, don't just say “not mentioned”—gently explain that it's probably not available, unless the user wants to confirm.
+              Always aim to help the user make a decision, not just state facts.
+
+              Your job is not just to return data, but to help the user make informed decisions with friendly, natural guidance. 
+              Example 1:
+              User: Does the Ocean View estate have a garden?
+              Assistant (internal reasoning): The user is asking about a specific estate. I need to get its details.
+              [Calls getEstateInfo with name: "Ocean View"]
+              Assistant: I checked the estate's details. It does have a garden.
+
+              Example 2:
+              User:
+              Does the Rosewood Villa estate have a garden?
+
+              Assistant (ideal tone):
+              Let me check that for you.
+              Okay, the Rosewood Villa has a large backyard with a swimming pool, but there's no mention of a garden—so it likely doesn't have one.
+              `,
+            },
+          ],
+        } as AIMessage,
+      }),
+    }
+  );
+
+  const data = await response.json();
+  return data.candidates as Candidate[];
+}
+
 (async function main() {
   const serverProcess = spawn("node", ["../server/dist/index.js"], {
     stdio: ["pipe", "pipe", "inherit"],
@@ -98,8 +179,25 @@ type Content = {
     }
   }
 
+  async function callAIWithTools(messages: AIMessage[]) {
+    const result = await callAI(
+      messages,
+      tools.map((tool) => ({
+        functionDeclarations: [
+          {
+            description: tool.description,
+            name: tool.name,
+            parameters: tool?.inputSchema,
+          },
+        ],
+      }))
+    );
+    return result;
+  }
+
   while (true) {
-    const options = [];
+    const options = [{ value: "ai", label: "Ask the AI" }];
+
     if (resources.length) {
       options.unshift({ value: "resource", label: "Get a resource" });
     }
@@ -166,6 +264,69 @@ type Content = {
       );
 
       dumpContent(contents);
+    }
+
+    if (action === "ai") {
+      const prompt = await text({
+        message: "What would you like to ask?",
+        defaultValue: "What kinds of drinks do you have?",
+      });
+
+      if (isCancel(prompt)) {
+        process.exit(0);
+      }
+
+      const messages: AIMessage[] = [
+        { role: "user", parts: [{ text: prompt }] },
+      ];
+
+      const promptResult = await callAIWithTools(messages);
+      messages.push({ parts: promptResult[0].content.parts, role: "model" });
+
+      for (const result of promptResult[0].content.parts) {
+        if (result.text) {
+          console.log(result.text);
+        }
+      }
+
+      const lastResultParts =
+        promptResult[0].content.parts[promptResult.length - 1];
+
+      if (lastResultParts.functionCall) {
+        console.log(
+          chalk.blueBright(
+            `Requesting tool call ${
+              lastResultParts.functionCall.name
+            } - ${JSON.stringify(lastResultParts.functionCall.args)}`
+          )
+        );
+
+        const { content }: { content: Content[] } = await send("tools/call", {
+          name: lastResultParts.functionCall?.name,
+          arguments: lastResultParts.functionCall?.args,
+        });
+
+        messages.push({
+          role: "user",
+          parts: [
+            {
+              functionResponse: {
+                name: lastResultParts.functionCall?.name!,
+                id: lastResultParts.functionCall?.id,
+                response: JSON.parse(content[0].text),
+              },
+            },
+          ],
+        });
+
+        const followUpResult = await callAIWithTools(messages);
+
+        for (const result of followUpResult[0].content.parts) {
+          if (result.text) {
+            console.log(result.text);
+          }
+        }
+      }
     }
   }
 })();

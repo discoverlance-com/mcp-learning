@@ -10,18 +10,18 @@ const serverInfo = {
 
 const estates = [
   {
-    name: "Rim Run Houses",
-    cost: 22.0,
+    name: "Ruul",
+    price: 22.0,
     description: "A house with a garden",
   },
   {
-    name: "Low Flat Home",
-    cost: 23.0,
+    name: "Cool",
+    price: 23.0,
     description: "A house with a swimming pool",
   },
   {
-    name: "Elevated Sink",
-    cost: 27.0,
+    name: "Kuul",
+    price: 27.0,
     description: "A two storey house",
   },
 ];
@@ -46,7 +46,8 @@ const resources = [
 const tools = [
   {
     name: "getEstates",
-    description: "Get a list of all estates sold by realtor",
+    description:
+      "Use this to retrieve a list of all available estates, this only includes their names. Useful when the user hasn't specified a name or wants to browse available options. ",
     inputSchema: { type: "object", properties: {} },
     async handle(_args: any) {
       return {
@@ -63,7 +64,7 @@ const tools = [
   },
   {
     name: "getEstatInfo",
-    description: "Get information on an estate sold by realtor",
+    description: `Use this to retrieve all available information about a specific estate, including its name, description, price. Further information about the estate is in the description. Use this whenever the user asks any question about a specific estate. The name parameter should match the name of an estate exactly. You must extract just the estate's name from the user's input, ignoring surrounding context or extra words. Examples: If the user asks: "Does the estate Sunset Villa have a garage?" — extract "Sunset Villa". If the user asks: "Is the estate, kuul having a storey?" — extract "kuul", not "kuul having a storey"`,
     inputSchema: {
       type: "object",
       properties: {
@@ -74,7 +75,9 @@ const tools = [
       required: ["name"],
     },
     async handle(args: { name: string }) {
-      const estate = estates.find((e) => e.name === args.name);
+      const estate = estates.find(
+        (e) => e.name.toLowerCase() === args.name.toLowerCase()
+      );
 
       return {
         content: [
